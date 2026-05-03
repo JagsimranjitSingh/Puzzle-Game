@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Gem Crush – Match-3</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <!-- Phaser 3 via CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.87.0/dist/phaser.min.js"></script>
+
+  <script>
+    'use strict';
+    /* ======================================================================
+       GEM CRUSH – Match-3 Puzzle Game
+       ─────────────────────────────────────────────────────────────────────
+       Engine  : Phaser 3.87  |  CDN, no external assets
+       Shapes  : Procedurally generated via Phaser Graphics
+       Scale   : Phaser.Scale.FIT – adapts to any screen / device
+       ====================================================================== */
+
+    // Board & canvas constants
+    const COLS = 8;
+    const ROWS = 8;
+    const CELL = 75;          // virtual px per grid cell
+    const BOARD_X = 10;          // horizontal margin
+    const BOARD_Y = 100;         // vertical offset (UI header space)
+    const CV_W = COLS * CELL + BOARD_X * 2;     // 620
+    const CV_H = ROWS * CELL + BOARD_Y + 10;   // 710
+
+    // Gem colours (vibrant, high-contrast)
+    const GEM_COLORS = [
+      0xe74c3c,   // 0 – Crimson   → circle
+      0x3b82f6,   // 1 – Blue      → rounded square
+      0x22c55e,   // 2 – Emerald   → diamond
+      0xf59e0b,   // 3 – Amber     → 5-point star
+      0xa855f7,   // 4 – Violet    → triangle
+      0x06b6d4,   // 5 – Cyan      → hexagon
+    ];
+    const NUM_TYPES = GEM_COLORS.length;
+
+    // State enum
+    const S = { IDLE: 0, SWAPPING: 1, MATCHING: 2, FALLING: 3 };
+
+    /* ======================================================================
+       BootScene – generates all gem textures once, then launches GameScene
+       ====================================================================== */
+    class BootScene extends Phaser.Scene {
+      constructor() { super('Boot'); }
+
+      create() {
+        const SZ = 64;  // texture size in pixels
+        const C = SZ / 2;
+
+        GEM_COLORS.forEach((color, i) => {
+          const g = this.make.graphics({ add: false });
+          const R = SZ / 2 - 4;   // outer radius / half-size
+
+          /* ── base fill + shape ── */
+          switch (i) {
+            /* 0 Circle */
+            case 0:
+              g.fillStyle(darken(color, .35)); g.fillCircle(C + 2, C + 2, R);      // shadow
+              g.fillStyle(color, 1); g.fillCircle(C, C, R);
+              g.fillStyle(lighten(color, .55)); g.fillCircle(C - R * .28, C - R * .28, R * .28); // specular
+              break;
+
+            /* 1 Rounded square */
+            case 1:
+              g.fillStyle(darken(color, .35)); g.fillRoundedRect(6, 6, SZ - 8, SZ - 8, 11);
+              g.fillStyle(color, 1); g.fillRoundedRect(4, 4, SZ - 8, SZ - 8, 11);
+              g.fillStyle(lighten(color, .5)); g.fillRoundedRect(9, 9, (SZ - 8) * .52, (SZ - 8) * .36, 6);
+              break;
+
+            /* 2 Diamond */
+            case 2: {
+              const d = [{ x: C, y: 4 }, { x: SZ - 4, y: C }, { x: C, y: SZ - 4 }, { x: 4, y: C }];
+              g.fillStyle(darken(color, .35));
+              g.fillPoints(d.map(p => ({ x: p.x + 2, y: p.y + 2 })), true);
+              g.fillStyle(color, 1); g.fillPoints(d, true);
+              g.fillStyle(lighten(color, .5));
+              g.fillPoints([{ x: C, y: 10 }, { x: C + R * .35, y: C - R * .12 },
+              { x: C, y: C - R * .06 }, { x: C - R * .3, y: C - R * .12 }], true);
+              break;
+            }
+
+            /* 3 Star (5-pointed) */
+            case 3: {
+              const sp = starPts(C, C, 5, R, R * .44);
+              g.fillStyle(darken(color, .35)); g.fillPoints(sp.map(p => ({ x: p.x + 2, y: p.y + 2 })), true);
+              g.fillStyle(color, 1); g.fillPoints(sp, true);
+              g.fillStyle(lighten(color, .5)); g.fillCircle(C - R * .16, C - R * .22, R * .18);
+              break;
+            }
+
+            /* 4 Triangle */
+            case 4:
+              g.fillStyle(darken(color, .35)); g.fillTriangle(C + 2, 7, SZ - 4, SZ - 4, 4, SZ - 4);
+              g.fillStyle(color, 1); g.fillTriangle(C, 5, SZ - 5, SZ - 5, 5, SZ - 5);
+              g.fillStyle(lighten(color, .5)); g.fillTriangle(C, 12, C + R * .38, C * .9, C - R * .38, C * .9);
+              break;
+
+            /* 5 Hexagon */
+            case 5: {
+              const hp = hexPts(C, C, R);
+              g.fillStyle(darken(color, .35)); g.fillPoints(hp.map(p => ({ x: p.x + 2, y: p.y + 2 })), true);
+              g.fillStyle(color, 1); g.fillPoints(hp, true);
+              g.fillStyle(lighten(color, .5)); g.fillCircle(C - R * .2, C - R * .22, R * .21);
+              break;
+            }
+          }
+
+          /* ── thin dark outline ── */
+          g.lineStyle(1.5, 0x000000, .22);
+          switch (i) {
+            case 0: g.strokeCircle(C, C, R); break;
+            case 1: g.strokeRoundedRect(4, 4, SZ - 8, SZ - 8, 11); break;
+            case 2: g.strokePoints([{ x: C, y: 4 }, { x: SZ - 4, y: C }, { x: C, y: SZ - 4 }, { x: 4, y: C }], true); break;
+            case 3: g.strokePoints(starPts(C, C, 5, R, R * .44), true); break;
+            case 4: g.strokeTriangle(C, 5, SZ - 5, SZ - 5, 5, SZ - 5); break;
+            case 5: g.strokePoints(hexPts(C, C, R), true); break;
+          }
+
+          g.generateTexture(`gem${i}`, SZ, SZ);
+          g.destroy();
+        });
+
+        this.scene.start('Game');
+      }
+    }
+
+    // Colour helpers
+    function darken(hex, amount) {
+      const r = Math.floor(((hex >> 16) & 0xff) * (1 - amount));
+      const g = Math.floor(((hex >> 8) & 0xff) * (1 - amount));
+      const b = Math.floor((hex & 0xff) * (1 - amount));
+      return (r << 16) | (g << 8) | b;
+    }
+    function lighten(hex, amount) {
+      const r = Math.min(255, Math.floor(((hex >> 16) & 0xff) + 255 * amount));
+      const g = Math.min(255, Math.floor(((hex >> 8) & 0xff) + 255 * amount));
+      const b = Math.min(255, Math.floor((hex & 0xff) + 255 * amount));
+      return (r << 16) | (g << 8) | b;
+    }
+
+    // Vertex generators
+    function starPts(cx, cy, n, R, r) {
+      const pts = [];
+      for (let i = 0; i < n * 2; i++) {
+        const a = (i * Math.PI / n) - Math.PI / 2;
+        const rad = i % 2 === 0 ? R : r;
+        pts.push({ x: cx + Math.cos(a) * rad, y: cy + Math.sin(a) * rad });
+      }
+      return pts;
+    }
+    function hexPts(cx, cy, r) {
+      const pts = [];
+      for (let i = 0; i < 6; i++) {
+        const a = (i * Math.PI / 3) - Math.PI / 6;
+        pts.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r });
+      }
+      return pts;
+    }
+
+    /* ======================================================================
+       GameScene – all gameplay lives here
+       ====================================================================== */
+    class GameScene extends Phaser.Scene {
+      constructor() { super('Game'); }
+
+      /* Lifecycle */
+      create() {
+        this.score = 0;          // current score
+        this.state = S.IDLE;     // game state
+        this.grid = [];         // grid[row][col] = gem type (0-5) | -1 (empty)
+        this.gems = [];         // gems[row][col] = Phaser.GameObjects.Image | null
+        this.dragGem = null;       // gem being dragged
+        this.dragSX = 0;          // drag start X
+        this.dragSY = 0;          // drag start Y
+
+        this._drawBoard();
+        this._buildUI();
+        this._initGrid();
+        this._spawnAll();
+        this._hookInput();
+      }
+
+      /* Board background (static, drawn once) */
+      _drawBoard() {
+        const g = this.add.graphics();
+
+        // Outer panel with gradient-like border
+        g.fillStyle(0x1a0635, 1);
+        g.fillRoundedRect(BOARD_X - 8, BOARD_Y - 8,
+          COLS * CELL + 16, ROWS * CELL + 16, 16);
+
+        g.fillStyle(0x2d0e50, 1);
+        g.fillRoundedRect(BOARD_X - 4, BOARD_Y - 4,
+          COLS * CELL + 8, ROWS * CELL + 8, 12);
+
+        // Checkerboard cell tiles
+        for (let r = 0; r < ROWS; r++) {
+          for (let c = 0; c < COLS; c++) {
+            const shade = (r + c) % 2 === 0 ? 0x3b1466 : 0x4a1c7e;
+            g.fillStyle(shade, 1);
+            g.fillRoundedRect(
+              BOARD_X + c * CELL + 3, BOARD_Y + r * CELL + 3,
+              CELL - 6, CELL - 6, 9
+            );
+          }
+        }
+      }
+
+      /* UI header */
+      _buildUI() {
+        const cx = CV_W / 2;
+
+        // Title
+        this.add.text(cx, 12, '✦  GEM CRUSH  ✦', {
+          fontSize: '24px',
+          fontFamily: '"Arial Black", "Impact", sans-serif',
+          color: '#e0aaff',
+          stroke: '#1a0635',
+          strokeThickness: 6,
+          shadow: { x: 0, y: 2, color: '#6d00cc', blur: 8, fill: true },
+        }).setOrigin(0.5, 0);
+
+        // Score pill
+        const pillW = 200, pillH = 40;
+        const pillBg = this.add.graphics();
+        pillBg.fillStyle(0x3b1466, 1);
+        pillBg.fillRoundedRect(cx - pillW / 2, 50, pillW, pillH, 12);
+        pillBg.lineStyle(1.5, 0xa855f7, .6);
+        pillBg.strokeRoundedRect(cx - pillW / 2, 50, pillW, pillH, 12);
+
+        this.scoreLabel = this.add.text(cx - 36, 70, 'SCORE', {
+          fontSize: '11px', fontFamily: 'Arial, sans-serif',
+          color: '#c084fc', letterSpacing: 3,
+        }).setOrigin(0.5);
+
+        this.scoreText = this.add.text(cx + 28, 70, '0', {
+          fontSize: '20px', fontFamily: '"Arial Black", sans-serif',
+          color: '#ffffff',
+        }).setOrigin(0.5);
+      }
+
+      /* Grid initialisation (guaranteed no initial matches) */
+      _initGrid() {
+        for (let r = 0; r < ROWS; r++) {
+          this.grid[r] = [];
+          for (let c = 0; c < COLS; c++) {
+            this.grid[r][c] = this._safePick(r, c);
+          }
+        }
+      }
+
+      /**
+       * Pick a gem type that won't immediately create a 3-in-a-row.
+       */
+      _safePick(r, c) {
+        const banned = new Set();
+        // Two to the left?
+        if (c >= 2 && this.grid[r][c - 1] === this.grid[r][c - 2]) banned.add(this.grid[r][c - 1]);
+        // Two above?
+        if (r >= 2 && this.grid[r - 1][c] === this.grid[r - 2][c]) banned.add(this.grid[r - 1][c]);
+        let t;
+        do { t = Phaser.Math.Between(0, NUM_TYPES - 1); } while (banned.has(t));
+        return t;
+      }
+
+      /* Spawn all gem images for the initial grid */
+      _spawnAll() {
+        this.gems = [];
+        for (let r = 0; r < ROWS; r++) {
+          this.gems[r] = [];
+          for (let c = 0; c < COLS; c++) {
+            this.gems[r][c] = this._mkGem(r, c, this.grid[r][c]);
+          }
+        }
+      }
+
+      /**
+       * Create a single gem Image at (row, col) with the given type.
+       */
+      _mkGem(row, col, type) {
+        const gem = this.add.image(this._gx(col), this._gy(row), `gem${type}`)
+          .setScale((CELL - 8) / 64);
+        gem.type = type;
+        gem.row = row;
+        gem.col = col;
+        return gem;
+      }
+
+      // Pixel-centre of a grid cell
+      _gx(col) { return BOARD_X + col * CELL + CELL / 2; }
+      _gy(row) { return BOARD_Y + row * CELL + CELL / 2; }
+
+      /* Input (mouse + touch) */
+      _hookInput() {
+        // Pointer down: pick up a gem
+        this.input.on('pointerdown', (p) => {
+          if (this.state !== S.IDLE) return;
+          const gem = this._gemAt(p.x, p.y);
+          if (!gem) return;
+          this.dragGem = gem;
+          this.dragSX = p.x;
+          this.dragSY = p.y;
+          // Lift animation: slight scale-up
+          this.tweens.add({ targets: gem, scale: gem.scale * 1.2, duration: 90, ease: 'Sine.Out' });
+        });
+
+        // Pointer up: determine swipe direction and attempt swap
+        this.input.on('pointerup', (p) => {
+          const gem = this.dragGem;
+          if (!gem) return;
+          this.dragGem = null;
+
+          // Restore gem scale
+          this.tweens.add({ targets: gem, scale: (CELL - 8) / 64, duration: 90, ease: 'Sine.Out' });
+
+          const dx = p.x - this.dragSX;
+          const dy = p.y - this.dragSY;
+
+          // Ignore taps (too short)
+          if (Math.hypot(dx, dy) < CELL * 0.22) return;
+
+          // Cardinal direction snap
+          let dr = 0, dc = 0;
+          if (Math.abs(dx) >= Math.abs(dy)) dc = dx > 0 ? 1 : -1;
+          else dr = dy > 0 ? 1 : -1;
+
+          const nr = gem.row + dr;
+          const nc = gem.col + dc;
+          if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS) {
+            this._trySwap(gem.row, gem.col, nr, nc);
+          }
+        });
+
+        // Pointer leaves canvas: cancel drag cleanly
+        this.input.on('pointerout', () => {
+          if (!this.dragGem) return;
+          this.tweens.add({ targets: this.dragGem, scale: (CELL - 8) / 64, duration: 90 });
+          this.dragGem = null;
+        });
+      }
+
+      /**
+       * Return the gem image located near pixel (px, py), or null.
+       */
+      _gemAt(px, py) {
+        const half = CELL / 2;
+        for (let r = 0; r < ROWS; r++)
+          for (let c = 0; c < COLS; c++) {
+            const g = this.gems[r][c];
+            if (g && Math.abs(g.x - px) < half && Math.abs(g.y - py) < half) return g;
+          }
+        return null;
+      }
+
+      /* Swap logic */
+      _trySwap(r1, c1, r2, c2) {
+        this.state = S.SWAPPING;
+
+        // Capture gem objects & pixel positions BEFORE modifying the grid
+        const g1 = this.gems[r1][c1];
+        const g2 = this.gems[r2][c2];
+        const x1 = this._gx(c1), y1 = this._gy(r1);
+        const x2 = this._gx(c2), y2 = this._gy(r2);
+
+        // Update logical grid and gem-object map
+        this._swapGrid(r1, c1, r2, c2);
+
+        // Animate the two gems crossing paths
+        let n = 0;
+        const onSwapDone = () => {
+          if (++n < 2) return;
+
+          const matches = this._findMatches();
+          if (matches.length === 0) {
+            // Invalid swap: revert 
+            this._swapGrid(r1, c1, r2, c2);  // logical revert
+            let n2 = 0;
+            const onRevert = () => { if (++n2 >= 2) this.state = S.IDLE; };
+            // Bounce back to original positions
+            this.tweens.add({ targets: g1, x: x1, y: y1, duration: 220, ease: 'Bounce.Out', onComplete: onRevert });
+            this.tweens.add({ targets: g2, x: x2, y: y2, duration: 220, ease: 'Bounce.Out', onComplete: onRevert });
+          } else {
+            // Valid swap: process matches 
+            this._processMatches(matches);
+          }
+        };
+
+        // g1 (was at r1,c1) slides to (x2,y2) and vice-versa
+        this.tweens.add({ targets: g1, x: x2, y: y2, duration: 230, ease: 'Sine.InOut', onComplete: onSwapDone });
+        this.tweens.add({ targets: g2, x: x1, y: y1, duration: 230, ease: 'Sine.InOut', onComplete: onSwapDone });
+      }
+
+      /**
+       * Swap grid data (types and Image references) and update gem metadata.
+       */
+      _swapGrid(r1, c1, r2, c2) {
+        [this.grid[r1][c1], this.grid[r2][c2]] = [this.grid[r2][c2], this.grid[r1][c1]];
+        [this.gems[r1][c1], this.gems[r2][c2]] = [this.gems[r2][c2], this.gems[r1][c1]];
+        const a = this.gems[r1][c1]; if (a) { a.row = r1; a.col = c1; }
+        const b = this.gems[r2][c2]; if (b) { b.row = r2; b.col = c2; }
+      }
+
+      /* Match detection */
+      /**
+       * Scan the grid for runs of 3+ identical types.
+       * Returns an array of { r, c } cell coordinates.
+       */
+      _findMatches() {
+        const found = new Set();
+        const key = (r, c) => r * COLS + c;
+
+        // Horizontal runs
+        for (let r = 0; r < ROWS; r++) {
+          let run = 1;
+          for (let c = 1; c <= COLS; c++) {
+            const same = c < COLS
+              && this.grid[r][c] !== -1
+              && this.grid[r][c] === this.grid[r][c - 1];
+            if (same) {
+              run++;
+            } else {
+              if (run >= 3) for (let k = c - run; k < c; k++) found.add(key(r, k));
+              run = 1;
+            }
+          }
+        }
+
+        // Vertical runs
+        for (let c = 0; c < COLS; c++) {
+          let run = 1;
+          for (let r = 1; r <= ROWS; r++) {
+            const same = r < ROWS
+              && this.grid[r][c] !== -1
+              && this.grid[r][c] === this.grid[r - 1][c];
+            if (same) {
+              run++;
+            } else {
+              if (run >= 3) for (let k = r - run; k < r; k++) found.add(key(k, c));
+              run = 1;
+            }
+          }
+        }
+
+        return [...found].map(k => ({ r: Math.floor(k / COLS), c: k % COLS }));
+      }
+
+      /* Match processing */
+      _processMatches(matches) {
+        this.state = S.MATCHING;
+
+        // Score: 10 pts per gem, bonus for large combos
+        const pts = matches.length * 10 + (matches.length > 5 ? matches.length * 5 : 0);
+        this.score += pts;
+        this.scoreText.setText(this.score.toString());
+
+        // Animate score text briefly for feedback
+        this.tweens.add({ targets: this.scoreText, scale: 1.35, duration: 120, yoyo: true, ease: 'Sine.InOut' });
+
+        // Mark cells empty in the logical grid immediately
+        matches.forEach(({ r, c }) => { this.grid[r][c] = -1; });
+
+        // Destroy gems with a pop/spin animation
+        let pending = matches.length;
+        const onAllDestroyed = () => this._applyGravity();
+
+        matches.forEach(({ r, c }) => {
+          const gem = this.gems[r][c];
+          this.gems[r][c] = null;
+          if (!gem) { if (--pending === 0) onAllDestroyed(); return; }
+
+          // Burst ring effect
+          const flash = this.add.graphics();
+          flash.lineStyle(3, GEM_COLORS[gem.type], .9);
+          flash.strokeCircle(gem.x, gem.y, CELL * .36);
+          this.tweens.add({
+            targets: flash, alpha: 0, scale: 2.2, duration: 320,
+            ease: 'Quad.Out', onComplete: () => flash.destroy()
+          });
+
+          // Gem destruction: shrink + spin + fade
+          this.tweens.add({
+            targets: gem, scale: 0, alpha: 0, angle: 135,
+            duration: 260, ease: 'Back.In',
+            onComplete: () => {
+              gem.destroy();
+              if (--pending === 0) onAllDestroyed();
+            }
+          });
+        });
+      }
+
+      /* Gravity & spawning */
+      _applyGravity() {
+        this.state = S.FALLING;
+
+        let total = 0;   // total tween operations expected
+        let done = 0;   // completed count
+        const tick = () => { if (++done >= total) this._checkCascade(); };
+
+        for (let c = 0; c < COLS; c++) {
+          // Step 1: compact existing gems downward into empty cells
+          let emptyRow = ROWS - 1;  // next free slot from the bottom
+          for (let r = ROWS - 1; r >= 0; r--) {
+            if (this.grid[r][c] === -1) continue;   // skip empty cells
+
+            if (r !== emptyRow) {
+              // Move gem logically
+              this.grid[emptyRow][c] = this.grid[r][c];
+              this.grid[r][c] = -1;
+
+              const gem = this.gems[r][c];
+              this.gems[emptyRow][c] = gem;
+              this.gems[r][c] = null;
+              gem.row = emptyRow;
+              gem.col = c;
+
+              // Tween gem downward (bounce for juice)
+              const dist = emptyRow - r;
+              total++;
+              this.tweens.add({
+                targets: gem,
+                y: this._gy(emptyRow),
+                duration: 160 + dist * 48,
+                ease: 'Bounce.Out',
+                onComplete: tick,
+              });
+            }
+            emptyRow--;
+          }
+
+          // Step 2: fill empty slots from the top with new gems
+          for (let row = emptyRow; row >= 0; row--) {
+            const type = Phaser.Math.Between(0, NUM_TYPES - 1);
+            this.grid[row][c] = type;
+
+            const gem = this._mkGem(row, c, type);
+            // Start the gem off-screen above the board
+            gem.y = BOARD_Y - (emptyRow - row + 1) * CELL;
+            this.gems[row][c] = gem;
+            gem.setAlpha(0);
+
+            total++;
+            this.tweens.add({
+              targets: gem,
+              y: this._gy(row),
+              alpha: 1,
+              duration: 220 + row * 32,
+              ease: 'Bounce.Out',
+              delay: 40 + (emptyRow - row) * 25,
+              onComplete: tick,
+            });
+          }
+        }
+
+        // Safety: if nothing moved (shouldn't happen, but guard anyway)
+        if (total === 0) this._checkCascade();
+      }
+
+      /* Cascade check */
+      /**
+       * After the board settles, check for new matches formed by falling gems.
+       * Recurse until the board is stable (combo chains).
+       */
+      _checkCascade() {
+        const matches = this._findMatches();
+        if (matches.length > 0) {
+          this._processMatches(matches);   // another wave
+        } else {
+          this.state = S.IDLE;            // board stable – player can move again
+        }
+      }
+    }
+
+    /* ======================================================================
+       Phaser game configuration
+       ====================================================================== */
+    new Phaser.Game({
+      type: Phaser.AUTO,
+      backgroundColor: '#0a0015',
+      scale: {
+        mode: Phaser.Scale.FIT,     // stretch canvas to fit window, keep ratio
+        autoCenter: Phaser.Scale.CENTER_BOTH,
+        width: CV_W,
+        height: CV_H,
+        min: { width: 280, height: 360 },
+        max: { width: 1240, height: 1420 },
+      },
+      scene: [BootScene, GameScene],
+    });
+  </script>
+</body>
+
+</html>
