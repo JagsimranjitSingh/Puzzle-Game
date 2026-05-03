@@ -22,3 +22,10 @@ canvas {
     image-rendering: pixelated;
     margin-inline: auto !important;
 }
+
+@media screen and (max-width: 500px) {
+    canvas {
+        margin-top: 0 !important;
+        padding-inline: 5px;
+    }
+}
